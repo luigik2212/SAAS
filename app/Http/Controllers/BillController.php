@@ -5,15 +5,20 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreBillRequest;
 use App\Http\Requests\UpdateBillRequest;
 use App\Models\Bill;
+use App\Models\Category;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 class BillController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): JsonResponse|View
     {
+        $this->authorize('viewAny', Bill::class);
+
         $now = Carbon::now('America/Sao_Paulo');
         $month = (string) $request->string('month', $now->format('Y-m'));
         $status = (string) $request->string('status', 'all');
@@ -84,11 +89,38 @@ class BillController extends Controller
             ],
         ];
 
-        return response()->json($payload);
+        if ($request->wantsJson()) {
+            return response()->json($payload);
+        }
+
+        $this->authorize('viewAny', Category::class);
+
+        $categories = Category::query()
+            ->where('user_id', auth()->id())
+            ->orderBy('name')
+            ->get();
+
+        $totalMonthBills = Bill::query()
+            ->where('user_id', auth()->id())
+            ->whereBetween('due_date', [$startOfMonth->toDateString(), $endOfMonth->toDateString()])
+            ->count();
+
+        return view('bills.index', [
+            'bills' => $bills,
+            'categories' => $categories,
+            'filters' => $payload['filters'],
+            'totals' => $payload['totals'],
+            'todayCount' => $dueTodayCount,
+            'lateCount' => $overdueCount,
+            'isMonthEmpty' => $totalMonthBills === 0,
+            'hasFilters' => $request->filled('search') || $request->filled('category_id') || $status !== 'all',
+        ]);
     }
 
-    public function store(StoreBillRequest $request): JsonResponse
+    public function store(StoreBillRequest $request): JsonResponse|RedirectResponse
     {
+        $this->authorize('create', Bill::class);
+
         $data = $request->validated();
         $data['user_id'] = auth()->id();
 
@@ -102,10 +134,14 @@ class BillController extends Controller
 
         $bill = Bill::query()->create($data);
 
-        return response()->json($bill->fresh(['category']), 201);
+        if ($request->wantsJson()) {
+            return response()->json($bill->fresh(['category']), 201);
+        }
+
+        return to_route('contas.index')->with('success', 'Conta criada com sucesso.');
     }
 
-    public function update(UpdateBillRequest $request, Bill $bill): JsonResponse
+    public function update(UpdateBillRequest $request, Bill $bill): JsonResponse|RedirectResponse
     {
         $this->authorize('update', $bill);
 
@@ -121,24 +157,34 @@ class BillController extends Controller
 
         $bill->update($data);
 
-        return response()->json($bill->fresh(['category']));
+        if ($request->wantsJson()) {
+            return response()->json($bill->fresh(['category']));
+        }
+
+        return to_route('contas.index')->with('success', 'Conta editada com sucesso.');
     }
 
-    public function destroy(Bill $bill): JsonResponse
+    public function destroy(Request $request, Bill $bill): JsonResponse|RedirectResponse
     {
         $this->authorize('delete', $bill);
 
         $bill->delete();
 
-        return response()->json([], 204);
+        if ($request->wantsJson()) {
+            return response()->json([], 204);
+        }
+
+        return to_route('contas.index')->with('success', 'Conta excluída com sucesso.');
     }
 
-    public function pay(Request $request, Bill $bill): JsonResponse
+    public function pay(Request $request, Bill $bill): JsonResponse|RedirectResponse
     {
         $this->authorize('pay', $bill);
 
         $validated = $request->validate([
             'paid_at' => ['nullable', 'date'],
+        ], [
+            'paid_at.date' => 'Informe uma data de pagamento válida.',
         ]);
 
         $paidAt = $validated['paid_at'] ?? Carbon::now('America/Sao_Paulo');
@@ -148,10 +194,14 @@ class BillController extends Controller
             'paid_at' => $paidAt,
         ]);
 
-        return response()->json($bill->fresh(['category']));
+        if ($request->wantsJson()) {
+            return response()->json($bill->fresh(['category']));
+        }
+
+        return to_route('contas.index')->with('success', 'Conta marcada como paga.');
     }
 
-    public function reopen(Bill $bill): JsonResponse
+    public function reopen(Request $request, Bill $bill): JsonResponse|RedirectResponse
     {
         $this->authorize('reopen', $bill);
 
@@ -160,7 +210,11 @@ class BillController extends Controller
             'paid_at' => null,
         ]);
 
-        return response()->json($bill->fresh(['category']));
+        if ($request->wantsJson()) {
+            return response()->json($bill->fresh(['category']));
+        }
+
+        return to_route('contas.index')->with('success', 'Conta reaberta com sucesso.');
     }
 
     private function monthBounds(string $month, Carbon $fallbackNow): array
