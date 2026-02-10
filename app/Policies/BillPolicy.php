@@ -7,6 +7,16 @@ use App\Models\User;
 
 class BillPolicy
 {
+    public function viewAny(User $user): bool
+    {
+        return $user->exists;
+    }
+
+    public function create(User $user): bool
+    {
+        return $user->exists;
+    }
+
     public function view(User $user, Bill $bill): bool
     {
         return $bill->user_id === $user->id;
